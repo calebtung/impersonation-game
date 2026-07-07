@@ -29,6 +29,14 @@ class LobbyFlowTestCase(unittest.TestCase):
         with self.assertRaisesRegex(LobbyError, "Please add questions before starting"):
             self.lobby.start_game("Host_01")
 
+    def test_start_game_requires_bride_and_groom_assignments(self):
+        with self.assertRaisesRegex(LobbyError, "Please assign BRIDE and GROOM before starting"):
+            self.lobby.start_game("Host_01", "Q1")
+
+        self.lobby.assign_special_role("Host_01", "Alice", Role.BRIDE)
+        with self.assertRaisesRegex(LobbyError, "Please assign BRIDE and GROOM before starting"):
+            self.lobby.start_game("Host_01")
+
     def test_set_questions_parses_non_empty_lines(self):
         raw = "  First?  \n\nSecond?\n   \nThird?  "
         self.lobby.set_questions_from_text("Host_01", raw)
@@ -87,11 +95,50 @@ class LobbyFlowTestCase(unittest.TestCase):
         boards = self.lobby.leaderboard_payload()
         self.assertEqual(boards["most_votes"][0], ("Alice", 3))
         self.assertEqual(dict(boards["voted_bride_most"]), {"Host_01": 1, "Alice": 1, "Bob": 1})
-        self.assertEqual(dict(boards["voted_groom_most"]), {"Cara": 1})
+        self.assertEqual(dict(boards["voted_groom_most"]), {"Host_01": 1, "Alice": 1, "Bob": 1})
         self.assertEqual(boards["bride_groom_agreement"]["agreed"], 1)
         self.assertEqual(boards["bride_groom_agreement"]["total_questions"], 1)
 
+    def test_voted_with_counts_use_matching_vote_not_answer_authorship(self):
+        self.lobby.assign_special_role("Host_01", "Alice", Role.BRIDE)
+        self.lobby.assign_special_role("Host_01", "Bob", Role.GROOM)
+
+        self.lobby.start_game("Host_01", "Q1")
+        self.lobby.submit_answer("Host_01", "host answer")
+        self.lobby.submit_answer("Alice", "bride answer")
+        self.lobby.submit_answer("Bob", "groom answer")
+        self.lobby.submit_answer("Cara", "friend answer")
+        self.lobby.start_voting("Host_01")
+
+        options = {
+            a["text"]: a["answer_id"]
+            for a in self.lobby.to_client_payload("Host_01")["answers_for_voting"]
+        }
+
+        # BRIDE votes for GROOM answer. GROOM votes for BRIDE answer.
+        self.lobby.submit_vote("Host_01", options["groom answer"])
+        self.lobby.submit_vote("Alice", options["groom answer"])
+        self.lobby.submit_vote("Bob", options["bride answer"])
+        self.lobby.submit_vote("Cara", options["bride answer"])
+
+        self.lobby.reveal_first_answer("Host_01")
+        while self.lobby.current_round.reveal_target == TargetKind.FRIEND_BLOCK:
+            self.lobby.reveal_votes("Host_01")
+            self.lobby.reveal_next_after_votes("Host_01")
+
+        self.lobby.reveal_votes("Host_01")
+        self.lobby.reveal_next_after_votes("Host_01")
+        self.lobby.reveal_votes("Host_01")
+        self.lobby.reveal_next_after_votes("Host_01")
+
+        self.assertEqual(self.lobby.phase, Phase.FINISH)
+        boards = self.lobby.leaderboard_payload()
+        self.assertEqual(dict(boards["voted_bride_most"]), {"Host_01": 1, "Alice": 1})
+        self.assertEqual(dict(boards["voted_groom_most"]), {"Bob": 1, "Cara": 1})
+
     def test_host_and_friend_cannot_vote_own_answer(self):
+        self.lobby.assign_special_role("Host_01", "Bob", Role.BRIDE)
+        self.lobby.assign_special_role("Host_01", "Cara", Role.GROOM)
         self.lobby.start_game("Host_01", "Q1")
         self.lobby.submit_answer("Host_01", "Host answer")
         self.lobby.submit_answer("Alice", "A")
@@ -132,6 +179,8 @@ class LobbyFlowTestCase(unittest.TestCase):
         self.assertEqual(self.lobby.submitted_votes_count(), 2)
 
     def test_to_client_payload_exposes_host_buttons_readiness_flags(self):
+        self.lobby.assign_special_role("Host_01", "Alice", Role.BRIDE)
+        self.lobby.assign_special_role("Host_01", "Bob", Role.GROOM)
         self.lobby.start_game("Host_01", "Q1")
         self.lobby.submit_answer("Host_01", "Host")
         self.lobby.submit_answer("Alice", "A")
@@ -162,6 +211,8 @@ class LobbyFlowTestCase(unittest.TestCase):
         self.assertTrue(host_payload["host_can_reveal_first"])
 
     def test_duplicate_answers_are_grouped_and_votes_credit_all_authors(self):
+        self.lobby.assign_special_role("Host_01", "Bob", Role.BRIDE)
+        self.lobby.assign_special_role("Host_01", "Cara", Role.GROOM)
         self.lobby.start_game("Host_01", "Q1")
         self.lobby.submit_answer("Host_01", "same answer")
         self.lobby.submit_answer("Alice", "same answer")
@@ -205,6 +256,8 @@ class LobbyFlowTestCase(unittest.TestCase):
         self.assertEqual(boards["Alice"], 3)
 
     def test_reveal_collapses_duplicate_friend_answers_into_single_step(self):
+        self.lobby.assign_special_role("Host_01", "Bob", Role.BRIDE)
+        self.lobby.assign_special_role("Host_01", "Cara", Role.GROOM)
         self.lobby.start_game("Host_01", "Q1")
         self.lobby.submit_answer("Host_01", "same")
         self.lobby.submit_answer("Alice", "same")

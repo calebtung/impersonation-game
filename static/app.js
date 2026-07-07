@@ -18,6 +18,7 @@ const state = {
 const appEl = document.getElementById("app");
 const statusLine = document.getElementById("status-line");
 const errorBox = document.getElementById("error-box");
+const currentUserEl = document.getElementById("current-user");
 
 function clearError() {
   errorBox.classList.add("hidden");
@@ -46,6 +47,68 @@ function roleTag(role, isHost) {
 
 function selectedAttr(value, expected) {
   return value === expected ? "selected" : "";
+}
+
+function titleForState(uiState) {
+  if (!uiState) return "Wedding Party Game";
+  if (uiState === "HOSTLOBBY") return "Lobby Control";
+  if (uiState === "EVERYONELOBBY") return "Waiting Room";
+  if (uiState.endsWith("GAMEQUESTION")) return "Impersonate!";
+  if (uiState.endsWith("GAMEVOTING")) return "Vote Now";
+  if (uiState.endsWith("GAMEREVEAL")) {
+    return "Answer Reveal";
+  }
+  if (uiState.includes("GAMEREVEALBRIDE")) return "Bride's Answer Reveal";
+  if (uiState.includes("GAMEREVEALGROOM")) return "Groom's Answer Reveal";
+  if (uiState.includes("GAMEREVEALVOTE")) return "Who Voted For This?";
+  if (uiState.endsWith("FINISH")) return "How many times did the Bride and Groom vote the same answer?";
+  return "Wedding Party Game";
+}
+
+function stateFootnote(uiState) {
+  if (!uiState) return "";
+  return `<p class="state-footnote">state: ${esc(uiState)}</p>`;
+}
+
+function findPlayer(data, username) {
+  if (!data?.players || !username) return null;
+  return data.players.find((p) => p.username === username) || null;
+}
+
+function findUsernameByRole(data, role) {
+  if (!data?.players) return null;
+  const player = data.players.find((p) => p.role === role);
+  return player?.username || null;
+}
+
+function splitUsernames(value) {
+  return String(value || "")
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function renderUsernameWithTag(data, username) {
+  const player = findPlayer(data, username);
+  if (!player) {
+    return `<strong>${esc(username)}</strong>`;
+  }
+  return `<strong>${esc(username)}</strong>${roleTag(player.role, player.is_host)}`;
+}
+
+function renderUsernameListWithTags(data, value) {
+  const names = splitUsernames(value);
+  if (!names.length) return "";
+  return names.map((name) => renderUsernameWithTag(data, name)).join(", ");
+}
+
+function updateCurrentUserBadge() {
+  if (!currentUserEl) return;
+  if (!state.latest || !state.username) {
+    currentUserEl.textContent = `you: ${state.username || "guest"}`;
+    return;
+  }
+  currentUserEl.innerHTML = `you: ${renderUsernameWithTag(state.latest, state.username)}`;
 }
 
 function renderLaunch() {
@@ -160,9 +223,7 @@ function renderPlayers(players, isHost) {
             : "";
           const controls =
             isHost && !p.is_host
-              ? `<div style="margin-top: 6px">${options}</div><button class="assign-role" data-user="${esc(
-                  p.username
-                )}">Assign</button>`
+              ? `<div style="margin-top: 6px">${options}</div>`
               : "";
           return `
             <li>
@@ -178,13 +239,16 @@ function renderPlayers(players, isHost) {
 
 function renderLobby(data) {
   const isHost = data.role === "HOST";
+  const hasBride = data.players.some((p) => p.role === "BRIDE");
+  const hasGroom = data.players.some((p) => p.role === "GROOM");
   const hostQuestionsDraft = state.drafts.hostQuestions || "";
   appEl.innerHTML = `
     <section class="card">
-      <h2>${isHost ? "Host Lobby" : "Lobby"}</h2>
+      <h2>${isHost ? "Lobby Control" : "Waiting Room"}</h2>
       <p class="small">Lobby Code: <strong>${esc(data.lobby_code)}</strong></p>
       <p class="small">Players: ${data.player_count}</p>
       ${renderPlayers(data.players, isHost)}
+      ${stateFootnote(data.ui_state)}
     </section>
     ${
       isHost
@@ -192,8 +256,9 @@ function renderLobby(data) {
       <section class="card">
         <label>Questions (one per line)</label>
         <textarea id="questions-box" placeholder="Type questions here">${esc(hostQuestionsDraft)}</textarea>
+        <p class="small">assign exactly one bride and one groom before starting.</p>
         <div style="height:8px"></div>
-        <button id="start-game">Start Game</button>
+        <button id="start-game" ${hasBride && hasGroom ? "" : "disabled"}>Start Game</button>
         <div style="height:8px"></div>
         <button id="close-lobby">Close Lobby</button>
       </section>
@@ -206,24 +271,15 @@ function renderLobby(data) {
     }
   `;
 
-  document.querySelectorAll(".assign-role").forEach((btn) => {
-    btn.onclick = () => {
-      const parent = btn.parentElement;
-      const select = parent.querySelector(".role-select");
-      const targetUsername = btn.dataset.user;
-      const role = state.drafts.roleSelectionByUser[targetUsername] || select.value;
-      state.drafts.roleSelectionByUser[targetUsername] = role;
-      socket.emit("assign_role", { target_username: targetUsername, role });
-    };
-  });
-
   document.querySelectorAll(".role-select").forEach((select) => {
     select.oninput = (e) => {
       const targetUsername = e.target.dataset.user;
       if (!targetUsername) {
         return;
       }
-      state.drafts.roleSelectionByUser[targetUsername] = e.target.value;
+      const role = e.target.value;
+      state.drafts.roleSelectionByUser[targetUsername] = role;
+      socket.emit("assign_role", { target_username: targetUsername, role });
     };
   });
 
@@ -266,7 +322,7 @@ function renderQuestion(data) {
   const answerDraft = state.drafts.answerByQuestion[questionKey] || "";
   appEl.innerHTML = `
     <section class="card">
-      <h2>${esc(data.ui_state)}</h2>
+      <h2>${titleForState(data.ui_state)}</h2>
       <p><strong>Question ${data.question_index + 1}/${data.question_total}</strong></p>
       <p>${esc(data.current_question || "")}</p>
       <label>Your Answer</label>
@@ -279,6 +335,7 @@ function renderQuestion(data) {
           ? `<button id="start-voting" ${data.host_can_start_voting ? "" : "disabled"}>Start Voting</button>`
           : ""
       }
+      ${stateFootnote(data.ui_state)}
     </section>
   `;
 
@@ -322,7 +379,7 @@ function renderVoting(data) {
 
   appEl.innerHTML = `
     <section class="card">
-      <h2>${esc(data.ui_state)}</h2>
+      <h2>${titleForState(data.ui_state)}</h2>
       <p><strong>Question ${data.question_index + 1}/${data.question_total}</strong></p>
       <p>${esc(data.current_question || "")}</p>
       <div>${voteButtons}</div>
@@ -332,6 +389,7 @@ function renderVoting(data) {
           ? `<button id="reveal-first" ${data.host_can_reveal_first ? "" : "disabled"}>Reveal First Answer</button>`
           : ""
       }
+      ${stateFootnote(data.ui_state)}
     </section>
   `;
 
@@ -384,22 +442,25 @@ function renderReveal(data) {
   const current = data.current_reveal_answer;
   const voters = current?.voted_by || data.answers_for_voting.find((a) => a.answer_id === current?.answer_id)?.voted_by || [];
   const inVoteSubstep = data.phase === "REVEAL_VOTES";
+  const currentAuthors = renderUsernameListWithTags(data, current?.username || "");
+  const votersText = voters.length ? renderUsernameListWithTags(data, voters.join(", ")) : "No votes";
 
   appEl.innerHTML = `
     <section class="card">
-      <h2>${esc(data.ui_state)}</h2>
+      <h2>${titleForState(data.ui_state)}</h2>
       <p><strong>Question ${data.question_index + 1}/${data.question_total}</strong></p>
       <p>${esc(data.current_question || "")}</p>
       ${
         current
           ? `
-        <p><strong>${esc(current.username)}</strong> (${esc(current.role)}): ${esc(current.text)}</p>
+        <div class="reveal-authors">${currentAuthors}</div>
+        <div class="reveal-answer">${esc(current.text)}</div>
       `
           : `<p class="small">No answer available for this reveal slot.</p>`
       }
       ${
         inVoteSubstep
-          ? `<p class="small">Votes: ${voters.length ? esc(voters.join(", ")) : "No votes"}</p>`
+          ? `<p class="small reveal-votes">Votes: ${votersText}</p>`
           : ""
       }
       ${
@@ -409,6 +470,7 @@ function renderReveal(data) {
             : `<button id="host-reveal-votes">Reveal Votes</button>`
           : ""
       }
+      ${stateFootnote(data.ui_state)}
     </section>
   `;
 
@@ -423,9 +485,9 @@ function renderReveal(data) {
   }
 }
 
-function leaderboardList(title, items) {
+function leaderboardList(title, items, data) {
   const rows = items.length
-    ? items.map((x) => `<li><strong>${esc(x[0])}</strong>: ${esc(x[1])}</li>`).join("")
+    ? items.map((x) => `<li>${renderUsernameWithTag(data, x[0])}: ${esc(x[1])}</li>`).join("")
     : '<li class="small">No data</li>';
   return `
     <section class="card">
@@ -442,15 +504,20 @@ function renderFinish(data) {
     voted_groom_most: [],
     bride_groom_agreement: { agreed: 0, total_questions: 0 },
   };
+  const brideUsername = findUsernameByRole(data, "BRIDE");
+  const groomUsername = findUsernameByRole(data, "GROOM");
+  const votedBrideMost = boards.voted_bride_most.filter((row) => row[0] !== brideUsername);
+  const votedGroomMost = boards.voted_groom_most.filter((row) => row[0] !== groomUsername);
 
   appEl.innerHTML = `
-    ${leaderboardList("Who Got the Most Votes", boards.most_votes)}
-    ${leaderboardList("Who Voted for BRIDE Most Often", boards.voted_bride_most)}
-    ${leaderboardList("Who Voted for GROOM Most Often", boards.voted_groom_most)}
+    ${leaderboardList("Who got the most votes?", boards.most_votes, data)}
+    ${leaderboardList("How many times did people vote with the Bride?", votedBrideMost, data)}
+    ${leaderboardList("How many times did people vote with the Groom?", votedGroomMost, data)}
     <section class="card stat-grid">
-      <h3>Bride/Groom Agreement</h3>
+      <h3>${titleForState(data.ui_state)}</h3>
       <p>${esc(boards.bride_groom_agreement.agreed)} / ${esc(boards.bride_groom_agreement.total_questions)}</p>
       ${data.role === "HOST" ? '<button id="return-lobby">Return to Lobby</button>' : ""}
+      ${stateFootnote(data.ui_state)}
     </section>
   `;
 
@@ -487,6 +554,7 @@ function renderFromServerState(data) {
 }
 
 function render() {
+  updateCurrentUserBadge();
   if (state.latest) {
     renderFromServerState(state.latest);
     return;

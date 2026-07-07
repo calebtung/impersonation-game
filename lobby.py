@@ -154,6 +154,10 @@ class Lobby:
 			self.set_questions_from_text(acting_username, raw_questions_text)
 		if not self.questions_list:
 			raise LobbyError("Please add questions before starting")
+		has_bride = any(p.role == Role.BRIDE for p in self.players.values())
+		has_groom = any(p.role == Role.GROOM for p in self.players.values())
+		if not has_bride or not has_groom:
+			raise LobbyError("Please assign BRIDE and GROOM before starting")
 		self.current_question_index = 0
 		self.phase = Phase.QUESTION
 		self.current_round = RoundState(
@@ -459,16 +463,23 @@ class Lobby:
 				continue
 			for option_username in selected_option["usernames"]:
 				self.total_votes_received[option_username] += 1
-			if Role.BRIDE.value in selected_option["roles"]:
-				self.voted_bride_count[voter] += 1
-			if Role.GROOM.value in selected_option["roles"]:
-				self.voted_groom_count[voter] += 1
 
 		bride_username = next((p.username for p in self.players.values() if p.role == Role.BRIDE), None)
 		groom_username = next((p.username for p in self.players.values() if p.role == Role.GROOM), None)
+		bride_vote = self.current_round.votes.get(bride_username) if bride_username else None
+		groom_vote = self.current_round.votes.get(groom_username) if groom_username else None
+
+		if bride_vote:
+			for voter, selected_option_id in self.current_round.votes.items():
+				if selected_option_id == bride_vote:
+					self.voted_bride_count[voter] += 1
+
+		if groom_vote:
+			for voter, selected_option_id in self.current_round.votes.items():
+				if selected_option_id == groom_vote:
+					self.voted_groom_count[voter] += 1
+
 		if bride_username and groom_username:
-			bride_vote = self.current_round.votes.get(bride_username)
-			groom_vote = self.current_round.votes.get(groom_username)
 			if bride_vote and groom_vote and bride_vote == groom_vote:
 				self.bride_groom_agreement += 1
 
