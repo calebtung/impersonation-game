@@ -53,6 +53,7 @@ class RoundState:
 	question_index: int
 	question_text: str
 	answers: list[AnswerEntry] = field(default_factory=list)
+	vote_options: list[dict[str, Any]] = field(default_factory=list)
 	votes: dict[str, str] = field(default_factory=dict)
 	reveal_target: TargetKind = TargetKind.FRIEND_BLOCK
 	reveal_friend_index: int = 0
@@ -191,6 +192,38 @@ class Lobby:
 			raise LobbyError("Cannot start voting until all answers are submitted")
 
 		self.current_round.answers.sort(key=lambda a: (role_sort_key(a.role), a.username.lower()))
+
+		grouped_by_text: dict[str, dict[str, Any]] = {}
+		for answer in self.current_round.answers:
+			group = grouped_by_text.setdefault(
+				answer.text,
+				{
+					"text": answer.text,
+					"answer_ids": [],
+					"usernames": [],
+					"roles": [],
+				},
+			)
+			group["answer_ids"].append(answer.answer_id)
+			group["usernames"].append(answer.username)
+			group["roles"].append(answer.role.value)
+
+		self.current_round.vote_options = []
+		for idx, answer in enumerate(self.current_round.answers, start=1):
+			group = grouped_by_text.get(answer.text)
+			if group is None:
+				continue
+			self.current_round.vote_options.append(
+				{
+					"option_id": f"Q{self.current_round.question_index}_V{idx}",
+					"text": group["text"],
+					"answer_ids": group["answer_ids"],
+					"usernames": group["usernames"],
+					"roles": group["roles"],
+				}
+			)
+			grouped_by_text.pop(answer.text)
+
 		self.answers_dict[self.current_round.question_index] = [
 			{
 				"answer_id": a.answer_id,
@@ -210,11 +243,13 @@ class Lobby:
 			raise LobbyError("Vote already submitted")
 
 		voter = self.get_player(username)
-		selected = next((a for a in self.current_round.answers if a.answer_id == answer_id), None)
+		selected = next((o for o in self.current_round.vote_options if o["option_id"] == answer_id), None)
 		if selected is None:
 			raise LobbyError("Invalid answer selected")
 
-		if voter.role in {Role.HOST, Role.FRIEND} and selected.username == username:
+		is_own = username in selected["usernames"]
+		is_shared_answer = len(selected["usernames"]) > 1
+		if voter.role in {Role.HOST, Role.FRIEND} and is_own and not is_shared_answer:
 			raise LobbyError("You cannot vote for your own answer")
 
 		self.current_round.votes[username] = answer_id
@@ -264,6 +299,20 @@ class Lobby:
 			return
 
 		if self.current_round.reveal_target == TargetKind.BRIDE:
+			if self.bride_and_groom_share_answer():
+				self._finalize_current_round_stats()
+				if self.current_question_index + 1 < len(self.questions_list):
+					self.current_question_index += 1
+					self.current_round = RoundState(
+						question_index=self.current_question_index,
+						question_text=self.questions_list[self.current_question_index],
+					)
+					self.phase = Phase.QUESTION
+				else:
+					self.current_round = None
+					self.phase = Phase.FINISH
+				return
+
 			self.current_round.reveal_target = TargetKind.GROOM
 			self.phase = Phase.REVEAL_ANSWER
 			return
@@ -297,22 +346,97 @@ class Lobby:
 		if acting_username != self.host_username:
 			raise LobbyError("Only HOST can close lobby")
 
-	def friend_block_answers(self) -> list[AnswerEntry]:
+	def friend_block_answers(self) -> list[dict[str, Any]]:
 		if self.current_round is None:
 			return []
-		return [a for a in self.current_round.answers if a.role in {Role.HOST, Role.FRIEND}]
 
-	def bride_answer(self) -> AnswerEntry | None:
+		answers_by_text: dict[str, list[AnswerEntry]] = {}
+		for answer in self.current_round.answers:
+			answers_by_text.setdefault(answer.text, []).append(answer)
+
+		reveal_entries: list[dict[str, Any]] = []
+		for grouped_answers in answers_by_text.values():
+			has_special = any(a.role in {Role.BRIDE, Role.GROOM} for a in grouped_answers)
+			friend_like = [a for a in grouped_answers if a.role in {Role.HOST, Role.FRIEND}]
+			if not friend_like or has_special:
+				continue
+
+			friend_like.sort(key=lambda a: (role_sort_key(a.role), a.username.lower()))
+			representative = friend_like[0]
+			reveal_entries.append(
+				{
+					"answer_id": representative.answer_id,
+					"answer_ids": [a.answer_id for a in friend_like],
+					"text": representative.text,
+					"username": ", ".join(a.username for a in friend_like),
+					"role": representative.role.value,
+				}
+			)
+
+		reveal_entries.sort(key=lambda e: (role_sort_key(Role(e["role"])), e["username"].lower()))
+		return reveal_entries
+
+	def bride_and_groom_share_answer(self) -> bool:
+		if self.current_round is None:
+			return False
+		bride = next((a for a in self.current_round.answers if a.role == Role.BRIDE), None)
+		groom = next((a for a in self.current_round.answers if a.role == Role.GROOM), None)
+		if bride is None or groom is None:
+			return False
+		return bride.text == groom.text
+
+	def bride_answer(self) -> dict[str, Any] | None:
 		if self.current_round is None:
 			return None
-		return next((a for a in self.current_round.answers if a.role == Role.BRIDE), None)
+		bride = next((a for a in self.current_round.answers if a.role == Role.BRIDE), None)
+		if bride is None:
+			return None
+		groom = next((a for a in self.current_round.answers if a.role == Role.GROOM), None)
 
-	def groom_answer(self) -> AnswerEntry | None:
+		shared_friend_like = [
+			a
+			for a in self.current_round.answers
+			if a.text == bride.text and a.role in {Role.HOST, Role.FRIEND}
+		]
+		shared_friend_like.sort(key=lambda a: (role_sort_key(a.role), a.username.lower()))
+
+		authors = shared_friend_like + [bride]
+		includes_groom = bool(groom and groom.text == bride.text)
+		if includes_groom:
+			authors.append(groom)
+		return {
+			"answer_id": bride.answer_id,
+			"answer_ids": [a.answer_id for a in authors],
+			"text": bride.text,
+			"username": ", ".join(a.username for a in authors),
+			"role": Role.BRIDE.value,
+			"includes_groom": includes_groom,
+		}
+
+	def groom_answer(self) -> dict[str, Any] | None:
 		if self.current_round is None:
 			return None
-		return next((a for a in self.current_round.answers if a.role == Role.GROOM), None)
+		groom = next((a for a in self.current_round.answers if a.role == Role.GROOM), None)
+		if groom is None:
+			return None
 
-	def get_current_reveal_answer(self) -> AnswerEntry | None:
+		shared_friend_like = [
+			a
+			for a in self.current_round.answers
+			if a.text == groom.text and a.role in {Role.HOST, Role.FRIEND}
+		]
+		shared_friend_like.sort(key=lambda a: (role_sort_key(a.role), a.username.lower()))
+
+		authors = shared_friend_like + [groom]
+		return {
+			"answer_id": groom.answer_id,
+			"answer_ids": [a.answer_id for a in authors],
+			"text": groom.text,
+			"username": ", ".join(a.username for a in authors),
+			"role": Role.GROOM.value,
+		}
+
+	def get_current_reveal_answer(self) -> dict[str, Any] | None:
 		if self.current_round is None:
 			return None
 		if self.current_round.reveal_target == TargetKind.FRIEND_BLOCK:
@@ -328,15 +452,16 @@ class Lobby:
 		if self.current_round is None:
 			return
 
-		answer_by_id = {a.answer_id: a for a in self.current_round.answers}
+		option_by_id = {o["option_id"]: o for o in self.current_round.vote_options}
 		for voter, answer_id in self.current_round.votes.items():
-			answer = answer_by_id.get(answer_id)
-			if answer is None:
+			selected_option = option_by_id.get(answer_id)
+			if selected_option is None:
 				continue
-			self.total_votes_received[answer.username] += 1
-			if answer.role == Role.BRIDE:
+			for option_username in selected_option["usernames"]:
+				self.total_votes_received[option_username] += 1
+			if Role.BRIDE.value in selected_option["roles"]:
 				self.voted_bride_count[voter] += 1
-			if answer.role == Role.GROOM:
+			if Role.GROOM.value in selected_option["roles"]:
 				self.voted_groom_count[voter] += 1
 
 		bride_username = next((p.username for p in self.players.values() if p.role == Role.BRIDE), None)
@@ -349,9 +474,13 @@ class Lobby:
 
 		stored = self.answers_dict.get(self.current_round.question_index, [])
 		voters_by_answer: dict[str, list[str]] = {a["answer_id"]: [] for a in stored}
+		answer_ids_by_option: dict[str, list[str]] = {
+			o["option_id"]: list(o["answer_ids"]) for o in self.current_round.vote_options
+		}
 		for voter, answer_id in self.current_round.votes.items():
-			if answer_id in voters_by_answer:
-				voters_by_answer[answer_id].append(voter)
+			for concrete_answer_id in answer_ids_by_option.get(answer_id, []):
+				if concrete_answer_id in voters_by_answer:
+					voters_by_answer[concrete_answer_id].append(voter)
 		for entry in stored:
 			entry["voted_by"] = sorted(voters_by_answer.get(entry["answer_id"], []), key=str.lower)
 
@@ -399,35 +528,52 @@ class Lobby:
 	def to_client_payload(self, username: str) -> dict[str, Any]:
 		player = self.get_player(username)
 		current_answer = self.get_current_reveal_answer()
-		current_round_votes = self.current_round.votes if self.current_round is not None else {}
 		live_voters_by_answer: dict[str, list[str]] = {}
-		for voter, answer_id in current_round_votes.items():
-			live_voters_by_answer.setdefault(answer_id, []).append(voter)
-		for voters in live_voters_by_answer.values():
-			voters.sort(key=str.lower)
+		if self.current_round is not None:
+			answer_ids_by_option: dict[str, list[str]] = {
+				o["option_id"]: list(o["answer_ids"]) for o in self.current_round.vote_options
+			}
+			for voter, option_id in self.current_round.votes.items():
+				for concrete_answer_id in answer_ids_by_option.get(option_id, []):
+					live_voters_by_answer.setdefault(concrete_answer_id, []).append(voter)
+			for voters in live_voters_by_answer.values():
+				voters.sort(key=str.lower)
 
 		vote_visibility: list[dict[str, Any]] = []
 		if self.current_round is not None:
-			saved_answers = self.answers_dict.get(self.current_round.question_index, [])
-			for entry in saved_answers:
-				masked_text = entry["text"]
-				if self.phase == Phase.VOTING:
-					masked_text = entry["text"]
-				is_own = entry["username"] == username
-				vote_visibility.append(
-					{
-						"answer_id": entry["answer_id"],
-						"text": masked_text,
-						"is_own": is_own,
-						"author_username": entry["username"] if self.phase in {Phase.REVEAL_ANSWER, Phase.REVEAL_VOTES, Phase.FINISH} else None,
-						"author_role": entry["role"] if self.phase in {Phase.REVEAL_ANSWER, Phase.REVEAL_VOTES, Phase.FINISH} else None,
-						"voted_by": (
-							live_voters_by_answer.get(entry["answer_id"], [])
-							if self.phase == Phase.REVEAL_VOTES
-							else []
-						),
-					}
-				)
+			if self.phase == Phase.VOTING:
+				for option in self.current_round.vote_options:
+					is_own = username in option["usernames"]
+					vote_visibility.append(
+						{
+							"answer_id": option["option_id"],
+							"text": option["text"],
+							"is_own": is_own,
+							"is_shared_own": is_own and len(option["usernames"]) > 1,
+							"author_username": None,
+							"author_role": None,
+							"voted_by": [],
+						}
+					)
+			else:
+				saved_answers = self.answers_dict.get(self.current_round.question_index, [])
+				for entry in saved_answers:
+					is_own = entry["username"] == username
+					vote_visibility.append(
+						{
+							"answer_id": entry["answer_id"],
+							"text": entry["text"],
+							"is_own": is_own,
+							"is_shared_own": False,
+							"author_username": entry["username"] if self.phase in {Phase.REVEAL_ANSWER, Phase.REVEAL_VOTES, Phase.FINISH} else None,
+							"author_role": entry["role"] if self.phase in {Phase.REVEAL_ANSWER, Phase.REVEAL_VOTES, Phase.FINISH} else None,
+							"voted_by": (
+								live_voters_by_answer.get(entry["answer_id"], [])
+								if self.phase == Phase.REVEAL_VOTES
+								else []
+							),
+						}
+					)
 
 		submitted_answers = []
 		if self.current_round is not None:
@@ -458,10 +604,20 @@ class Lobby:
 			"player_has_voted": username in (self.current_round.votes if self.current_round else {}),
 			"answers_for_voting": vote_visibility,
 			"current_reveal_answer": {
-				"answer_id": current_answer.answer_id,
-				"text": current_answer.text,
-				"username": current_answer.username,
-				"role": current_answer.role.value,
+				"answer_id": current_answer["answer_id"],
+				"answer_ids": current_answer.get("answer_ids", [current_answer["answer_id"]]),
+				"text": current_answer["text"],
+				"username": current_answer["username"],
+				"role": current_answer["role"],
+				"includes_groom": current_answer.get("includes_groom", False),
+				"voted_by": sorted(
+					{
+						voter
+						for answer_id in current_answer.get("answer_ids", [current_answer["answer_id"]])
+						for voter in live_voters_by_answer.get(answer_id, [])
+					},
+					key=str.lower,
+				),
 			}
 			if current_answer
 			else None,

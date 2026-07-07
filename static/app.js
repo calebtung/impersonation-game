@@ -89,11 +89,12 @@ function renderCreateLobby() {
     render();
   };
   document.getElementById("create-username").oninput = (e) => {
+    e.target.value = e.target.value.toLowerCase();
     state.drafts.createUsername = e.target.value;
   };
   document.getElementById("create-submit").onclick = () => {
     clearError();
-    const username = document.getElementById("create-username").value.trim();
+    const username = document.getElementById("create-username").value.trim().toLowerCase();
     state.username = username;
     state.drafts.createUsername = username;
     socket.emit("create_lobby", { username });
@@ -123,15 +124,17 @@ function renderJoinLobby() {
     render();
   };
   document.getElementById("join-code").oninput = (e) => {
+    e.target.value = e.target.value.toLowerCase();
     state.drafts.joinCode = e.target.value;
   };
   document.getElementById("join-username").oninput = (e) => {
+    e.target.value = e.target.value.toLowerCase();
     state.drafts.joinUsername = e.target.value;
   };
   document.getElementById("join-submit").onclick = () => {
     clearError();
-    const code = document.getElementById("join-code").value.trim();
-    const username = document.getElementById("join-username").value.trim();
+    const code = document.getElementById("join-code").value.trim().toLowerCase();
+    const username = document.getElementById("join-username").value.trim().toLowerCase();
     state.username = username;
     state.lobbyCode = code;
     state.drafts.joinCode = code;
@@ -227,6 +230,7 @@ function renderLobby(data) {
   const questionsBox = document.getElementById("questions-box");
   if (questionsBox) {
     questionsBox.oninput = (e) => {
+      e.target.value = e.target.value.toLowerCase();
       state.drafts.hostQuestions = e.target.value;
     };
   }
@@ -234,7 +238,7 @@ function renderLobby(data) {
   const startGame = document.getElementById("start-game");
   if (startGame) {
     startGame.onclick = () => {
-      const questionsText = (document.getElementById("questions-box")?.value || "").trim();
+      const questionsText = (document.getElementById("questions-box")?.value || "").trim().toLowerCase();
       state.drafts.hostQuestions = questionsText;
       socket.emit("start_game", { questions_text: questionsText });
     };
@@ -282,12 +286,13 @@ function renderQuestion(data) {
   const answerInput = document.getElementById("answer-box");
   if (answerInput && !data.player_has_answered) {
     answerInput.oninput = (e) => {
+      e.target.value = e.target.value.toLowerCase();
       state.drafts.answerByQuestion[questionKey] = e.target.value;
     };
   }
   if (submitBtn) {
     submitBtn.onclick = () => {
-      const answer = document.getElementById("answer-box").value;
+      const answer = document.getElementById("answer-box").value.toLowerCase();
       state.drafts.answerByQuestion[questionKey] = answer;
       socket.emit("submit_answer", { answer });
     };
@@ -303,7 +308,7 @@ function renderVoting(data) {
   const isHost = data.role === "HOST";
   const voteButtons = data.answers_for_voting
     .map((a) => {
-      const disableOwn = (data.role === "HOST" || data.role === "FRIEND") && a.is_own;
+      const disableOwn = (data.role === "HOST" || data.role === "FRIEND") && a.is_own && !a.is_shared_own;
       const disabled = data.player_has_voted || disableOwn;
       return `
         <button class="answer-btn ${a.is_own ? "answer-own" : ""}" data-answer-id="${esc(a.answer_id)}" ${
@@ -360,6 +365,12 @@ function actionLabelForRevealVotes(data) {
     return "Reveal Bride Answer";
   }
   if (role === "BRIDE") {
+    if (data.current_reveal_answer?.includes_groom) {
+      if (data.question_index + 1 < data.question_total) {
+        return "Next Question";
+      }
+      return "Finish Game";
+    }
     return "Reveal Groom Answer";
   }
   if (data.question_index + 1 < data.question_total) {
@@ -371,7 +382,7 @@ function actionLabelForRevealVotes(data) {
 function renderReveal(data) {
   const isHost = data.role === "HOST";
   const current = data.current_reveal_answer;
-  const voters = data.answers_for_voting.find((a) => a.answer_id === current?.answer_id)?.voted_by || [];
+  const voters = current?.voted_by || data.answers_for_voting.find((a) => a.answer_id === current?.answer_id)?.voted_by || [];
   const inVoteSubstep = data.phase === "REVEAL_VOTES";
 
   appEl.innerHTML = `

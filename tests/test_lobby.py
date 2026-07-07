@@ -50,11 +50,14 @@ class LobbyFlowTestCase(unittest.TestCase):
         self.lobby.start_voting("Host_01")
         self.assertEqual(self.lobby.phase, Phase.VOTING)
 
-        answers = {a.username: a.answer_id for a in self.lobby.current_round.answers}
-        self.lobby.submit_vote("Host_01", answers["Alice"])
-        self.lobby.submit_vote("Alice", answers["Alice"])
-        self.lobby.submit_vote("Bob", answers["Alice"])
-        self.lobby.submit_vote("Cara", answers["Bob"])
+        options = {
+            a["text"]: a["answer_id"]
+            for a in self.lobby.to_client_payload("Host_01")["answers_for_voting"]
+        }
+        self.lobby.submit_vote("Host_01", options["First dance"])
+        self.lobby.submit_vote("Alice", options["First dance"])
+        self.lobby.submit_vote("Bob", options["First dance"])
+        self.lobby.submit_vote("Cara", options["Ring entrance"])
 
         self.assertTrue(self.lobby.is_everyone_voted())
         self.lobby.reveal_first_answer("Host_01")
@@ -96,13 +99,17 @@ class LobbyFlowTestCase(unittest.TestCase):
         self.lobby.submit_answer("Cara", "C")
         self.lobby.start_voting("Host_01")
 
-        answers = {a.username: a.answer_id for a in self.lobby.current_round.answers}
+        host_options = self.lobby.to_client_payload("Host_01")["answers_for_voting"]
+        host_own = next(a for a in host_options if a["is_own"]) ["answer_id"]
+
+        alice_options = self.lobby.to_client_payload("Alice")["answers_for_voting"]
+        alice_own = next(a for a in alice_options if a["is_own"]) ["answer_id"]
 
         with self.assertRaisesRegex(LobbyError, "cannot vote for your own answer"):
-            self.lobby.submit_vote("Host_01", answers["Host_01"])
+            self.lobby.submit_vote("Host_01", host_own)
 
         with self.assertRaisesRegex(LobbyError, "cannot vote for your own answer"):
-            self.lobby.submit_vote("Alice", answers["Alice"])
+            self.lobby.submit_vote("Alice", alice_own)
 
     def test_bride_and_groom_can_vote_own_answer(self):
         self.lobby.assign_special_role("Host_01", "Alice", Role.BRIDE)
@@ -115,9 +122,12 @@ class LobbyFlowTestCase(unittest.TestCase):
         self.lobby.submit_answer("Cara", "Friend answer")
         self.lobby.start_voting("Host_01")
 
-        answers = {a.username: a.answer_id for a in self.lobby.current_round.answers}
-        self.lobby.submit_vote("Alice", answers["Alice"])
-        self.lobby.submit_vote("Bob", answers["Bob"])
+        bride_options = self.lobby.to_client_payload("Alice")["answers_for_voting"]
+        bride_own = next(a for a in bride_options if a["is_own"]) ["answer_id"]
+        groom_options = self.lobby.to_client_payload("Bob")["answers_for_voting"]
+        groom_own = next(a for a in groom_options if a["is_own"]) ["answer_id"]
+        self.lobby.submit_vote("Alice", bride_own)
+        self.lobby.submit_vote("Bob", groom_own)
 
         self.assertEqual(self.lobby.submitted_votes_count(), 2)
 
@@ -136,17 +146,144 @@ class LobbyFlowTestCase(unittest.TestCase):
         self.assertTrue(host_payload["host_can_start_voting"])
 
         self.lobby.start_voting("Host_01")
-        answers = {a.username: a.answer_id for a in self.lobby.current_round.answers}
-        self.lobby.submit_vote("Host_01", answers["Alice"])
-        self.lobby.submit_vote("Alice", answers["Bob"])
-        self.lobby.submit_vote("Bob", answers["Alice"])
+        options = {
+            a["text"]: a["answer_id"]
+            for a in self.lobby.to_client_payload("Host_01")["answers_for_voting"]
+        }
+        self.lobby.submit_vote("Host_01", options["A"])
+        self.lobby.submit_vote("Alice", options["B"])
+        self.lobby.submit_vote("Bob", options["A"])
 
         host_payload = self.lobby.to_client_payload("Host_01")
         self.assertFalse(host_payload["host_can_reveal_first"])
 
-        self.lobby.submit_vote("Cara", answers["Alice"])
+        self.lobby.submit_vote("Cara", options["A"])
         host_payload = self.lobby.to_client_payload("Host_01")
         self.assertTrue(host_payload["host_can_reveal_first"])
+
+    def test_duplicate_answers_are_grouped_and_votes_credit_all_authors(self):
+        self.lobby.start_game("Host_01", "Q1")
+        self.lobby.submit_answer("Host_01", "same answer")
+        self.lobby.submit_answer("Alice", "same answer")
+        self.lobby.submit_answer("Bob", "unique one")
+        self.lobby.submit_answer("Cara", "unique two")
+        self.lobby.start_voting("Host_01")
+
+        host_options = self.lobby.to_client_payload("Host_01")["answers_for_voting"]
+        self.assertEqual(len(host_options), 3)
+        merged = next(a for a in host_options if a["text"] == "same answer")
+        self.assertTrue(merged["is_own"])
+        self.assertTrue(merged["is_shared_own"])
+
+        alice_options = self.lobby.to_client_payload("Alice")["answers_for_voting"]
+        alice_merged = next(a for a in alice_options if a["text"] == "same answer")
+        self.assertTrue(alice_merged["is_own"])
+        self.assertTrue(alice_merged["is_shared_own"])
+
+        merged_option_id = merged["answer_id"]
+        unique_one_id = next(a for a in host_options if a["text"] == "unique one")["answer_id"]
+
+        # HOST and FRIEND can vote for their own merged answer when it is shared.
+        self.lobby.submit_vote("Host_01", merged_option_id)
+        self.lobby.submit_vote("Alice", merged_option_id)
+        self.lobby.submit_vote("Bob", merged_option_id)
+        self.lobby.submit_vote("Cara", unique_one_id)
+
+        self.lobby.reveal_first_answer("Host_01")
+        while self.lobby.phase == Phase.REVEAL_ANSWER and self.lobby.current_round.reveal_target == TargetKind.FRIEND_BLOCK:
+            self.lobby.reveal_votes("Host_01")
+            self.lobby.reveal_next_after_votes("Host_01")
+
+        self.lobby.reveal_votes("Host_01")
+        self.lobby.reveal_next_after_votes("Host_01")
+        self.lobby.reveal_votes("Host_01")
+        self.lobby.reveal_next_after_votes("Host_01")
+
+        self.assertEqual(self.lobby.phase, Phase.FINISH)
+        boards = dict(self.lobby.leaderboard_payload()["most_votes"])
+        self.assertEqual(boards["Host_01"], 3)
+        self.assertEqual(boards["Alice"], 3)
+
+    def test_reveal_collapses_duplicate_friend_answers_into_single_step(self):
+        self.lobby.start_game("Host_01", "Q1")
+        self.lobby.submit_answer("Host_01", "same")
+        self.lobby.submit_answer("Alice", "same")
+        self.lobby.submit_answer("Bob", "unique")
+        self.lobby.submit_answer("Cara", "other")
+        self.lobby.start_voting("Host_01")
+
+        options = {a["text"]: a["answer_id"] for a in self.lobby.to_client_payload("Host_01")["answers_for_voting"]}
+        self.lobby.submit_vote("Host_01", options["same"])
+        self.lobby.submit_vote("Alice", options["same"])
+        self.lobby.submit_vote("Bob", options["same"])
+        self.lobby.submit_vote("Cara", options["same"])
+
+        self.lobby.reveal_first_answer("Host_01")
+        first = self.lobby.get_current_reveal_answer()
+        self.assertEqual(first["text"], "same")
+        self.assertEqual(first["username"], "Host_01, Alice")
+
+        self.lobby.reveal_votes("Host_01")
+        payload = self.lobby.to_client_payload("Host_01")
+        self.assertEqual(payload["current_reveal_answer"]["voted_by"], ["Alice", "Bob", "Cara", "Host_01"])
+
+    def test_duplicate_with_bride_is_deferred_to_bride_turn(self):
+        self.lobby.assign_special_role("Host_01", "Alice", Role.BRIDE)
+        self.lobby.assign_special_role("Host_01", "Bob", Role.GROOM)
+
+        self.lobby.start_game("Host_01", "Q1")
+        self.lobby.submit_answer("Host_01", "same")
+        self.lobby.submit_answer("Alice", "same")
+        self.lobby.submit_answer("Bob", "groom only")
+        self.lobby.submit_answer("Cara", "friend only")
+        self.lobby.start_voting("Host_01")
+
+        options = {a["text"]: a["answer_id"] for a in self.lobby.to_client_payload("Host_01")["answers_for_voting"]}
+        self.lobby.submit_vote("Host_01", options["same"])
+        self.lobby.submit_vote("Alice", options["same"])
+        self.lobby.submit_vote("Bob", options["same"])
+        self.lobby.submit_vote("Cara", options["same"])
+
+        self.lobby.reveal_first_answer("Host_01")
+        first = self.lobby.get_current_reveal_answer()
+        self.assertEqual(first["text"], "friend only")
+
+        self.lobby.reveal_votes("Host_01")
+        self.lobby.reveal_next_after_votes("Host_01")
+        bride_reveal = self.lobby.get_current_reveal_answer()
+        self.assertEqual(bride_reveal["role"], "BRIDE")
+        self.assertEqual(bride_reveal["username"], "Host_01, Alice")
+
+    def test_bride_and_groom_same_answer_is_consolidated_on_bride_and_skips_groom(self):
+        self.lobby.assign_special_role("Host_01", "Alice", Role.BRIDE)
+        self.lobby.assign_special_role("Host_01", "Bob", Role.GROOM)
+
+        self.lobby.start_game("Host_01", "Q1")
+        self.lobby.submit_answer("Host_01", "host only")
+        self.lobby.submit_answer("Alice", "same")
+        self.lobby.submit_answer("Bob", "same")
+        self.lobby.submit_answer("Cara", "friend only")
+        self.lobby.start_voting("Host_01")
+
+        options = {a["text"]: a["answer_id"] for a in self.lobby.to_client_payload("Host_01")["answers_for_voting"]}
+        self.lobby.submit_vote("Host_01", options["same"])
+        self.lobby.submit_vote("Alice", options["same"])
+        self.lobby.submit_vote("Bob", options["same"])
+        self.lobby.submit_vote("Cara", options["same"])
+
+        self.lobby.reveal_first_answer("Host_01")
+        while self.lobby.current_round.reveal_target == TargetKind.FRIEND_BLOCK:
+            self.lobby.reveal_votes("Host_01")
+            self.lobby.reveal_next_after_votes("Host_01")
+
+        bride_reveal = self.lobby.get_current_reveal_answer()
+        self.assertEqual(bride_reveal["role"], "BRIDE")
+        self.assertEqual(bride_reveal["username"], "Alice, Bob")
+        self.assertTrue(bride_reveal["includes_groom"])
+
+        self.lobby.reveal_votes("Host_01")
+        self.lobby.reveal_next_after_votes("Host_01")
+        self.assertEqual(self.lobby.phase, Phase.FINISH)
 
 
 class GameRegistryTestCase(unittest.TestCase):

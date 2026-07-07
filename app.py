@@ -69,7 +69,7 @@ def on_disconnect() -> None:
 
 @socketio.on("create_lobby")
 def create_lobby(data: dict) -> None:
-	username = (data.get("username") or "").strip()
+	username = (data.get("username") or "").strip().lower()
 	try:
 		lobby = registry.create_lobby(username)
 		registry.bind_sid(request.sid, lobby.code, username)
@@ -81,8 +81,8 @@ def create_lobby(data: dict) -> None:
 
 @socketio.on("join_lobby")
 def join_lobby_event(data: dict) -> None:
-	code = (data.get("code") or "").strip()
-	username = (data.get("username") or "").strip()
+	code = (data.get("code") or "").strip().lower()
+	username = (data.get("username") or "").strip().lower()
 	try:
 		lobby = registry.join_lobby(code, username)
 		registry.bind_sid(request.sid, code, username)
@@ -164,7 +164,7 @@ def set_questions_event(data: dict) -> None:
 	if identity is None:
 		return
 	code, username = identity
-	text = data.get("questions_text") or ""
+	text = (data.get("questions_text") or "").lower()
 
 	lobby = registry.lobbies.get(code)
 	if lobby is None:
@@ -188,7 +188,7 @@ def start_game_event(data: dict | None = None) -> None:
 	try:
 		questions_text = ""
 		if data:
-			questions_text = (data.get("questions_text") or "")
+			questions_text = (data.get("questions_text") or "").lower()
 		lobby.start_game(username, questions_text)
 		_broadcast_lobby_state(code)
 	except LobbyError as exc:
@@ -201,7 +201,7 @@ def submit_answer_event(data: dict) -> None:
 	if identity is None:
 		return
 	code, username = identity
-	answer_text = data.get("answer") or ""
+	answer_text = (data.get("answer") or "").lower()
 
 	lobby = registry.lobbies.get(code)
 	if lobby is None:
