@@ -1,0 +1,175 @@
+:root {
+  --bg-0: #fdf9f2;
+  --bg-1: #fff3da;
+  --ink: #1f2937;
+  --muted: #6b7280;
+  --brand: #c2410c;
+  --ok: #166534;
+  --bad: #b91c1c;
+  --card: #ffffff;
+  --line: #e5e7eb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: radial-gradient(circle at 20% 0%, var(--bg-1), var(--bg-0));
+  min-height: 100vh;
+}
+
+.app-shell {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 12px;
+}
+
+.topbar {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+#status-line {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+label {
+  display: block;
+  font-size: 0.92rem;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+input,
+textarea,
+button,
+select {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  font-size: 1rem;
+  padding: 10px;
+}
+
+textarea {
+  min-height: 110px;
+  resize: vertical;
+}
+
+button {
+  background: var(--brand);
+  color: #fff;
+  border: none;
+  font-weight: 600;
+}
+
+button[disabled] {
+  opacity: 0.45;
+}
+
+.button-row {
+  display: grid;
+  gap: 8px;
+}
+
+.tag {
+  display: inline-block;
+  font-size: 0.75rem;
+  border-radius: 100px;
+  padding: 2px 8px;
+  margin-left: 6px;
+}
+
+.tag-host {
+  background: #ffe4c7;
+  color: #9a3412;
+}
+
+.tag-bride {
+  background: #ffe4e6;
+  color: #be123c;
+}
+
+.tag-groom {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.tag-friend {
+  background: #ecfeff;
+  color: #155e75;
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.list li {
+  border-top: 1px solid var(--line);
+  padding: 9px 0;
+}
+
+.list li:first-child {
+  border-top: none;
+}
+
+.small {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.answer-btn {
+  margin-bottom: 8px;
+}
+
+.answer-own {
+  border: 2px solid #fb923c;
+}
+
+.error-box {
+  background: #fef2f2;
+  color: var(--bad);
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  padding: 10px;
+  margin-bottom: 10px;
+}
+
+.hidden {
+  display: none;
+}
+
+.stat-grid {
+  display: grid;
+  gap: 8px;
+}
+
+@media (min-width: 640px) {
+  .button-row.cols-2 {
+    grid-template-columns: 1fr 1fr;
+  }
+}
