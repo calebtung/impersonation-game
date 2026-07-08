@@ -67,7 +67,7 @@ function titleForState(uiState) {
 
 function stateFootnote(uiState) {
   if (!uiState) return "";
-  return `<p class="state-footnote">state: ${esc(uiState)}</p>`;
+  return `<p class="state-footnote">debug state: ${esc(uiState)}</p>`;
 }
 
 function findPlayer(data, username) {
