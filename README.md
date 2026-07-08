@@ -1,195 +1,332 @@
-# Wedding Party Game
+# Wedding Party Browser Game
 
-Real-time, phone-friendly party game for a wedding group.
+A real-time phone browser game for weddings and in-room parties.
 
-One person creates a lobby as HOST, everyone joins with a 4-digit code, the host assigns BRIDE/GROOM tags, and each round runs:
+One player is the HOST, one is BRIDE, one is GROOM, everyone else is FRIEND.
+Players answer prompts, vote anonymously, then reveal who wrote what and who voted for what.
 
-1. Everyone submits an answer to the current question.
-2. Everyone votes on the best/funniest answer (anonymized first).
-3. Host reveals answers and voters in a staged reveal flow.
-4. Scores/leaderboards are tracked across all questions.
+This README is written for two goals:
 
-At the end, a finish screen shows leaderboards and BRIDE/GROOM agreement stats.
+1. Run and test locally.
+2. Host on a public VPS so everyone can join from their phones.
 
-Made with GitHub Copilot and lots of prompt engineering.
+## What The Game Supports
 
-## Stack
+- 4-digit lobby code creation and join flow.
+- Live lobby list with role tags.
+- HOST-controlled BRIDE/GROOM assignment (unique per role, replacement-safe).
+- Question list entry (newline-separated).
+- Per-question answer submit phase with live completion counter.
+- Anonymous voting with role-aware self-vote rules.
+- Multi-step reveal flow:
+  - friend/host block answers
+  - bride answer
+  - groom answer
+  - votes shown per revealed answer
+- End-of-game leaderboards and BRIDE/GROOM agreement stat.
+- Return to lobby for a fresh game.
 
-- Backend: Flask + Flask-SocketIO
-- Frontend: Vanilla JS + Socket.IO client
-- Transport: WebSocket (Socket.IO)
-- State: In-memory Python objects (no database)
+## State Machine Mapping
 
-## Project Structure
+The implementation uses a compact backend phase engine plus per-role UI state names.
 
-- `app.py`: Flask app + Socket.IO event handlers + lobby broadcasts
-- `lobby.py`: Core game model/state machine (`Lobby`, `GameRegistry`, rules, transitions)
-- `templates/index.html`: Single-page shell
-- `static/app.js`: Client-side renderer and socket event emitters
-- `static/styles.css`: UI styling
+Backend phases:
 
-## Quick Start
+- LOBBY
+- QUESTION
+- VOTING
+- REVEAL_ANSWER
+- REVEAL_VOTES
+- FINISH
 
-## 1) Create and activate a virtual environment
+Per-player UI states emitted by server payload:
 
-Linux/macOS:
+- LOBBY
+  - HOSTLOBBY
+  - EVERYONELOBBY
+- QUESTION
+  - HOSTGAMEQUESTION
+  - BRIDEGAMEQUESTION
+  - GROOMGAMEQUESTION
+  - FRIENDGAMEQUESTION
+- VOTING
+  - HOSTGAMEVOTING
+  - BRIDEGAMEVOTING
+  - GROOMGAMEVOTING
+  - FRIENDGAMEVOTING
+- REVEAL_ANSWER
+  - HOSTGAMEREVEAL / BRIDEGAMEREVEAL / GROOMGAMEREVEAL / FRIENDGAMEREVEAL
+  - HOSTGAMEREVEALBRIDE / BRIDEGAMEREVEALBRIDE / GROOMGAMEREVEALBRIDE / FRIENDGAMEREVEALBRIDE
+  - HOSTGAMEREVEALGROOM / BRIDEGAMEREVEALGROOM / GROOMGAMEREVEALGROOM / FRIENDGAMEREVEALGROOM
+- REVEAL_VOTES
+  - HOSTGAMEREVEALVOTE / BRIDEGAMEREVEALVOTE / GROOMGAMEREVEALVOTE / FRIENDGAMEREVEALVOTE
+  - HOSTGAMEREVEALVOTEBRIDE / BRIDEGAMEREVEALVOTEBRIDE / GROOMGAMEREVEALVOTEBRIDE / FRIENDGAMEREVEALVOTEBRIDE
+  - HOSTGAMEREVEALVOTEGROOM / BRIDEGAMEREVEALVOTEGROOM / GROOMGAMEREVEALVOTEGROOM / FRIENDGAMEREVEALVOTEGROOM
+- FINISH
+  - HOSTFINISH
+  - BRIDEFINISH
+  - GROOMFINISH
+  - FRIENDFINISH
 
-```bash
+Reveal order implemented:
+
+1. HOST + FRIEND block (HOST first, then FRIEND answers)
+2. BRIDE answer
+3. GROOM answer
+
+## Rules Implemented In Code
+
+- Username validation: 2-20 chars, letters/numbers/underscore only.
+- HOST role cannot be reassigned.
+- BRIDE and GROOM are unique roles; assigning a new one demotes previous holder to FRIEND.
+- HOST can only start voting after all players submit answers.
+- HOST can only reveal first answer after all players submit votes.
+- Self-vote rules:
+  - HOST and FRIEND cannot vote a purely self-authored option.
+  - BRIDE and GROOM can vote their own option.
+- Duplicate identical answers are grouped into one voting option.
+- If HOST disconnects or leaves, lobby is closed for everyone.
+
+## Project Layout
+
+- app.py
+  - Flask app and Socket.IO event handlers.
+  - SID/lobby binding, broadcasts, audit logging.
+- lobby.py
+  - Core game model, transitions, reveal routing, leaderboard scoring.
+- templates/index.html
+  - Single-page shell.
+- static/app.js
+  - Client renderer and socket interactions.
+- static/styles.css
+  - Mobile-first UI styling.
+- tests/test_lobby.py
+  - Unit tests for transitions and scoring.
+- tests/test_ui_integration.py
+  - Browser integration tests with Playwright.
+
+## Local Development
+
+### 1) Create virtual environment
+
 python3 -m venv .venv
 source .venv/bin/activate
-```
 
-Windows (PowerShell):
+### 2) Install dependencies
 
-```powershell
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
+pip install -r requirements-dev.txt
 
-## 2) Install dependencies
+### 3) Run app
 
-```bash
+.venv/bin/python app.py
+
+Open in browser:
+
+http://127.0.0.1:5000
+
+### 4) Run tests
+
+.venv/bin/python -m unittest discover -s tests -p "test_*.py"
+
+Notes:
+
+- UI integration tests require Playwright and Chromium.
+- If Chromium is missing, run: .venv/bin/python -m playwright install chromium
+
+## How To Play (Party Instructions)
+
+### Host setup flow
+
+1. Open the site and tap Create Lobby.
+2. Enter HOST username and enter the lobby.
+3. Tell guests the 4-digit lobby code.
+4. Assign one BRIDE and one GROOM in lobby controls.
+5. Paste questions (one question per line).
+6. Tap Start Game.
+
+### Round flow
+
+1. Everyone answers the prompt.
+2. HOST starts voting after all answers are in.
+3. Everyone votes anonymously.
+4. HOST reveals answers and then votes for each answer.
+5. HOST advances to next question or finishes game at end.
+
+### End flow
+
+1. Everyone sees leaderboards and agreement stats.
+2. HOST taps Return to Lobby for a fresh game.
+
+## Production Hosting On A VPS (Open Internet)
+
+Target stack:
+
+- Ubuntu VPS
+- systemd service for the Python app
+- Nginx reverse proxy with WebSocket headers
+- HTTPS via Let’s Encrypt
+
+Recommended VPS size for about 25 players:
+
+- 2 vCPU
+- 2 GB RAM
+
+### 1) DNS and server prep
+
+Create an A record, for example:
+
+party.example.com -> YOUR_VPS_IP
+
+SSH in and install packages:
+
+sudo apt-get update
+sudo apt-get install -y python3 python3-venv nginx certbot python3-certbot-nginx
+
+### 2) Deploy project
+
+sudo mkdir -p /opt/impersonation-game
+sudo chown "$USER":"$USER" /opt/impersonation-game
+
+Copy project files into /opt/impersonation-game, then:
+
+cd /opt/impersonation-game
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
 pip install -r requirements.txt
-```
 
-## 3) Run the app
+### 3) Create environment file
 
-```bash
-python app.py
-```
+Create /opt/impersonation-game/.env:
 
-Server starts on:
+SECRET_KEY=replace-with-a-long-random-secret
+IMPERSONATION_AUDIT_LOG_PATH=/opt/impersonation-game/logs/answer_vote_audit.json
 
-- `http://127.0.0.1:5000`
-- `http://0.0.0.0:5000` (bound to all interfaces)
+Important current behavior in app.py:
 
-## 4) Play from phones on the same Wi-Fi
+- SECRET_KEY is still hardcoded in code.
+- debug=True is enabled in code.
 
-1. Start the server on your laptop.
-2. Find your laptop's LAN IP (example: `192.168.1.42`).
-3. Ask everyone to open `http://<LAN_IP>:5000` in mobile browser.
-4. Host taps **Create Lobby** and shares the 4-digit lobby code.
-5. Everyone else taps **Join Lobby**.
+Before public launch, update app.py to read SECRET_KEY and debug mode from environment.
 
-If people cannot connect:
+### 4) Create systemd service
 
-- Confirm all devices are on the same network.
-- Allow port `5000` in firewall settings.
-- Avoid guest Wi-Fi networks that isolate clients.
+Create /etc/systemd/system/impersonation-game.service
 
-## Roles and Rules
+[Unit]
+Description=Impersonation Game (Flask-SocketIO)
+After=network.target
 
-Roles:
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/impersonation-game
+EnvironmentFile=/opt/impersonation-game/.env
+ExecStart=/opt/impersonation-game/.venv/bin/python /opt/impersonation-game/app.py
+Restart=always
+RestartSec=3
 
-- HOST: creates/controls lobby and progression
-- BRIDE: special role assigned by host
-- GROOM: special role assigned by host
-- FRIEND: default role for everyone else
+[Install]
+WantedBy=multi-user.target
 
-Important rules implemented:
+Then enable and start:
 
-- Username must match: letters/numbers/underscore, 2-20 chars.
-- Lobby code is random 4 digits.
-- Only host can assign BRIDE/GROOM/FRIEND roles.
-- BRIDE and GROOM are unique; assigning a new one demotes the previous holder to FRIEND.
-- Host can start voting only after all answers are submitted.
-- Host can reveal answers only after all votes are submitted.
-- HOST and FRIEND cannot vote for their own answer.
-- BRIDE and GROOM can vote for their own answer.
-- If host leaves/disconnects, lobby closes for everyone.
+sudo mkdir -p /opt/impersonation-game/logs
+sudo chown -R www-data:www-data /opt/impersonation-game
+sudo systemctl daemon-reload
+sudo systemctl enable impersonation-game
+sudo systemctl start impersonation-game
+sudo systemctl status impersonation-game
 
-## Game Flow (Implemented)
+### 5) Nginx config (HTTP + WebSocket proxy)
 
-This code supports the full flow requested through role-specific UI states.
+Create /etc/nginx/sites-available/impersonation-game:
 
-High-level phase progression:
+server {
+    listen 80;
+    server_name party.example.com;
 
-1. `LOBBY`
-2. `QUESTION`
-3. `VOTING`
-4. `REVEAL_ANSWER`
-5. `REVEAL_VOTES`
-6. Repeat reveal substeps until round ends
-7. Next question -> back to `QUESTION`, or final -> `FINISH`
+    location / {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_http_version 1.1;
 
-Role-specific UI state names are generated from phase + role (examples):
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
 
-- `HOSTGAMEQUESTION`, `BRIDEGAMEQUESTION`, `FRIENDGAMEQUESTION`
-- `HOSTGAMEVOTING`, `GROOMGAMEVOTING`, etc.
-- `HOSTGAMEREVEAL`, `HOSTGAMEREVEALBRIDE`, `HOSTGAMEREVEALGROOM`
-- `HOSTGAMEREVEALVOTE`, `HOSTGAMEREVEALVOTEBRIDE`, `HOSTGAMEREVEALVOTEGROOM`
-- `HOSTFINISH`, `BRIDEFINISH`, `GROOMFINISH`, `FRIENDFINISH`
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
 
-Reveal ordering is enforced as:
+        proxy_read_timeout 3600;
+        proxy_send_timeout 3600;
+    }
+}
 
-1. HOST answer
-2. FRIEND answers (alphabetical by username inside role grouping)
-3. BRIDE answer
-4. GROOM answer
+Enable and reload:
 
-## Leaderboards and Stats
+sudo ln -s /etc/nginx/sites-available/impersonation-game /etc/nginx/sites-enabled/impersonation-game
+sudo nginx -t
+sudo systemctl reload nginx
 
-At finish, app computes and displays:
+### 6) Enable HTTPS
 
-- **Who Got the Most Votes**
-- **Who Voted for BRIDE Most Often**
-- **Who Voted for GROOM Most Often**
-- **BRIDE/GROOM Agreement**: number of questions where bride and groom voted the same answer
+sudo certbot --nginx -d party.example.com
 
-## Socket Events (Reference)
+### 7) Firewall
 
-Client -> server:
+sudo ufw allow OpenSSH
+sudo ufw allow "Nginx Full"
+sudo ufw enable
+sudo ufw status
 
-- `create_lobby`
-- `join_lobby`
-- `leave_lobby`
-- `close_lobby`
-- `assign_role`
-- `set_questions` (supported by backend)
-- `start_game`
-- `submit_answer`
-- `start_voting`
-- `submit_vote`
-- `reveal_first_answer`
-- `reveal_votes`
-- `next_reveal_step`
-- `return_to_lobby`
+### 8) Party-day smoke test
 
-Server -> client:
+1. Open https://party.example.com on at least 3 phones.
+2. Run one full round: answer, vote, reveal, next question.
+3. Watch logs live:
 
-- `connected`
-- `state_update`
-- `game_error`
-- `left_lobby`
-- `lobby_closed`
+sudo journalctl -u impersonation-game -f
 
-## Data Model Notes
+## Socket Events
 
-- `questions_list`: ordered list of host-entered questions
-- `answers_dict[question_index]`: ordered saved answers with:
-  - `answer_id`
-  - `username`
-  - `role`
-  - `text`
-  - `voted_by` (filled during reveal-votes/finalization)
-- Per-round transient state tracks:
-  - submitted answers
-  - submitted votes
-  - current reveal target and index
+Client to server:
+
+- create_lobby
+- join_lobby
+- leave_lobby
+- close_lobby
+- assign_role
+- set_questions
+- start_game
+- submit_answer
+- start_voting
+- submit_vote
+- reveal_first_answer
+- reveal_votes
+- next_reveal_step
+- return_to_lobby
+
+Server to client:
+
+- connected
+- state_update
+- game_error
+- left_lobby
+- lobby_closed
 
 ## Operational Notes
 
-Current implementation is great for a single party session, but keep in mind:
+- Runtime state is in memory only. Restarting service resets active lobbies/games.
+- This is designed for a single server process, not horizontal scaling.
+- Client and server currently normalize usernames/questions/answers to lowercase.
+- CORS is open in current app configuration.
 
-- In-memory state only: restarting server clears all lobbies/game history.
-- Single-process assumptions: horizontal scaling would need shared state.
-- No auth/accounts: usernames are lobby-scoped only.
-- `SECRET_KEY` in `app.py` should be changed for non-local use.
-- CORS is open (`cors_allowed_origins="*"`) for convenience.
+## Suggested Pre-Event Checklist
 
-## Hosting Tips for an Event
-
-- Use a stable laptop plugged into power.
-- Keep browser tab/server process open the whole party.
-- Test with 2-3 phones before guests arrive.
-- Prepare questions in advance and paste into host textbox/
+1. Run all tests.
+2. Verify BRIDE/GROOM assignment and reassignment behavior.
+3. Verify reveal sequence with at least one dry run.
+4. Prepare your question list in advance and paste into host panel.
+5. Keep a backup device signed in as HOST.
