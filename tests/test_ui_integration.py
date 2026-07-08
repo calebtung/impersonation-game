@@ -52,7 +52,11 @@ class UiIntegrationTestCase(unittest.TestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            env={
+                **os.environ,
+                "PYTHONUNBUFFERED": "1",
+                "IMPERSONATION_ALLOW_UNSAFE_WERKZEUG": "1",
+            },
         )
 
         try:

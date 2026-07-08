@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO, emit, join_room, leave_room
 
@@ -316,4 +318,12 @@ def return_to_lobby_event() -> None:
 
 
 if __name__ == "__main__":
-	socketio.run(app, host="0.0.0.0", port=5000, debug=True)
+	allow_unsafe = os.getenv("IMPERSONATION_ALLOW_UNSAFE_WERKZEUG") == "1" or os.getenv("CI") == "true"
+	socketio.run(
+		app,
+		host="0.0.0.0",
+		port=5000,
+		debug=True,
+		use_reloader=False,
+		allow_unsafe_werkzeug=allow_unsafe,
+	)
