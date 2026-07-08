@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
 
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO, emit, join_room, leave_room
@@ -12,6 +16,8 @@ app = Flask(__name__)
 app.config["SECRET_KEY"] = "replace-me-before-production"
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 registry = GameRegistry()
+AUDIT_LOG_PATH = Path(os.getenv("IMPERSONATION_AUDIT_LOG_PATH", "logs/answer_vote_audit.json"))
+_audit_lock = threading.Lock()
 
 
 @app.get("/")
@@ -36,6 +42,26 @@ def _broadcast_lobby_state(code: str) -> None:
 
 def _identity_for_request() -> tuple[str, str] | None:
 	return registry.identity_for_sid(request.sid)
+
+
+def _append_audit_event(event: dict) -> None:
+	with _audit_lock:
+		AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+		payload = {"events": []}
+		if AUDIT_LOG_PATH.exists():
+			try:
+				payload = json.loads(AUDIT_LOG_PATH.read_text(encoding="utf-8"))
+			except json.JSONDecodeError:
+				payload = {"events": []}
+		if not isinstance(payload, dict):
+			payload = {"events": []}
+		events = payload.get("events")
+		if not isinstance(events, list):
+			events = []
+		payload["events"] = events
+
+		events.append(event)
+		AUDIT_LOG_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 @socketio.on("connect")
@@ -210,6 +236,21 @@ def submit_answer_event(data: dict) -> None:
 		return
 	try:
 		lobby.submit_answer(username, answer_text)
+		player = lobby.get_player(username)
+		question_text = lobby.current_round.question_text if lobby.current_round else None
+		question_index = lobby.current_round.question_index if lobby.current_round else None
+		_append_audit_event(
+			{
+				"timestamp_utc": datetime.now(timezone.utc).isoformat(),
+				"event_type": "answer_submitted",
+				"lobby_code": code,
+				"question_index": question_index,
+				"question_text": question_text,
+				"username": username,
+				"role": player.role.value,
+				"answer_text": answer_text,
+			}
+		)
 		_broadcast_lobby_state(code)
 	except LobbyError as exc:
 		_emit_error(str(exc))
@@ -245,6 +286,29 @@ def submit_vote_event(data: dict) -> None:
 		return
 	try:
 		lobby.submit_vote(username, answer_id)
+		player = lobby.get_player(username)
+		question_text = lobby.current_round.question_text if lobby.current_round else None
+		question_index = lobby.current_round.question_index if lobby.current_round else None
+		selected_option = None
+		if lobby.current_round is not None:
+			selected_option = next(
+				(o for o in lobby.current_round.vote_options if o.get("option_id") == answer_id),
+				None,
+			)
+		_append_audit_event(
+			{
+				"timestamp_utc": datetime.now(timezone.utc).isoformat(),
+				"event_type": "vote_submitted",
+				"lobby_code": code,
+				"question_index": question_index,
+				"question_text": question_text,
+				"username": username,
+				"role": player.role.value,
+				"selected_option_id": answer_id,
+				"selected_option_text": selected_option.get("text") if selected_option else None,
+				"selected_option_usernames": selected_option.get("usernames") if selected_option else None,
+			}
+		)
 		_broadcast_lobby_state(code)
 	except LobbyError as exc:
 		_emit_error(str(exc))
